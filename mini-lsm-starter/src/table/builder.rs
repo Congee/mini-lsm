@@ -6,24 +6,35 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use super::{BlockMeta, SsTable};
+use super::{Block, BlockMeta, SsTable};
+use crate::block::BlockBuilder;
 use crate::lsm_storage::BlockCache;
 
 /// Builds an SSTable from key-value pairs.
 pub struct SsTableBuilder {
     pub(super) meta: Vec<BlockMeta>,
+    builder: BlockBuilder,
+    blocks: Vec<Block>,
     // Add other fields you need.
 }
 
 impl SsTableBuilder {
     /// Create a builder based on target block size.
     pub fn new(block_size: usize) -> Self {
-        unimplemented!()
+        Self {
+            meta: vec![],
+            builder: BlockBuilder::new(block_size),
+            blocks: vec![],
+        }
     }
 
     /// Adds a key-value pair to SSTable.
     /// Note: You should split a new block when the current block is full.(`std::mem::replace` may be of help here)
     pub fn add(&mut self, key: &[u8], value: &[u8]) {
+        // TODO: buonds check for large key/value
+        if self.builder.add(key, value) {
+
+        }
         unimplemented!()
     }
 

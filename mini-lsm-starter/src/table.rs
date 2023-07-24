@@ -4,12 +4,13 @@
 mod builder;
 mod iterator;
 
+use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
 pub use builder::SsTableBuilder;
-use bytes::{Buf, Bytes};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 pub use iterator::SsTableIterator;
 
 use crate::block::Block;
@@ -27,17 +28,31 @@ impl BlockMeta {
     /// Encode block meta to a buffer.
     /// You may add extra fields to the buffer,
     /// in order to help keep track of `first_key` when decoding from the same buffer in the future.
-    pub fn encode_block_meta(
-        block_meta: &[BlockMeta],
-        #[allow(clippy::ptr_arg)] // remove this allow after you finish
-        buf: &mut Vec<u8>,
-    ) {
-        unimplemented!()
+    ///
+    /// | offset | key len | first_key |
+    pub fn encode_block_meta(block_meta: &[BlockMeta], buf: &mut Vec<u8>) {
+        let mut bytes = BytesMut::new();
+        for meta in block_meta {
+            bytes.put_u32_le(meta.offset as _);
+            bytes.put_u16_le(meta.first_key.len() as _);
+            bytes.copy_from_slice(&meta.first_key);
+        }
+        bytes.copy_to_slice(buf);
     }
 
     /// Decode block meta from a buffer.
     pub fn decode_block_meta(buf: impl Buf) -> Vec<BlockMeta> {
-        unimplemented!()
+        let mut buf = buf;
+        let mut vec: Vec<BlockMeta> = vec![];
+        while buf.has_remaining() {
+            let offset = buf.get_u32_le() as usize;
+            let key_len = buf.get_u16() as usize;
+            let first_key = buf.copy_to_bytes(key_len);
+
+            vec.push(Self { offset, first_key })
+        }
+
+        vec
     }
 }
 
@@ -55,11 +70,21 @@ impl FileObject {
 
     /// Create a new file object (day 2) and write the file to the disk (day 4).
     pub fn create(path: &Path, data: Vec<u8>) -> Result<Self> {
-        unimplemented!()
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(path)?
+            .write_all(&data)?;
+
+        Ok(Self(Bytes::copy_from_slice(&data)))
     }
 
     pub fn open(path: &Path) -> Result<Self> {
-        unimplemented!()
+        let mut file = std::fs::OpenOptions::new().read(true).open(path)?;
+        let mut bin = BytesMut::new().writer();
+        std::io::copy(&mut file, &mut bin)?;
+
+        Ok(Self(bin.into_inner().into()))
     }
 }
 
