@@ -8,15 +8,10 @@
   outputs = { self, nixpkgs, flake-utils, rust-overlay, ... }:
     flake-utils.lib.eachDefaultSystem (system:
     let
-      overlays = [ rust-overlay.overlays.default
-        (final: prev: {
-          cargo = final.rust-bin.nightly.latest.default;
-          rustc = final.rust-bin.nightly.latest.default;
-        })
-      ];
-      old = import nixpkgs { inherit system; };
-      codelldb = old.vscode-extensions.vadimcn.vscode-lldb;
-      pkgs = import nixpkgs { inherit system overlays; };
+      overlays = [ (import rust-overlay) ];
+      pkgs = import nixpkgs { inherit system; };
+      codelldb = pkgs.vscode-extensions.vadimcn.vscode-lldb;
+      rust = (import nixpkgs { inherit system overlays; }).rust-bin;
 
       # https://nixos.wiki/wiki/Nix_Cookbook#Wrapping_packages
       debugger = pkgs.runCommand "codelldb" {} ''
@@ -26,9 +21,7 @@
     in {
       devShell = pkgs.mkShell {
         nativeBuildInputs = with pkgs; [  # build time
-          rustc
-          cargo
-          clippy
+          rust.nightly.latest.default
           rust-analyzer
           pkgconfig
           buf-language-server
@@ -41,7 +34,7 @@
         ++ lib.optional stdenv.isDarwin darwin.apple_sdk.frameworks.Security
         ++ lib.optional stdenv.isDarwin darwin.apple_sdk.frameworks.AppKit
         ;
-        RUST_SRC_PATH = "${pkgs.rust-bin.nightly.latest.rust-src}/lib/rustlib/src/rust/library";
+        RUST_SRC_PATH = "${rust.nightly.latest.rust-src}/lib/rustlib/src/rust/library";
         # mold does not seem to use pkg-config with openssl.dev
         # LD_LIBRARY_PATH = "${pkgs.openssl.out}/lib";  XXX: causes glibc version mismatch
         # RUST_SRC_PATH = "${pkgs.rust.packages.nightly.rustPlatform.rustLibSrc}";
