@@ -32,9 +32,7 @@ impl SsTableBuilder {
     /// Note: You should split a new block when the current block is full.(`std::mem::replace` may be of help here)
     pub fn add(&mut self, key: &[u8], value: &[u8]) {
         // TODO: buonds check for large key/value
-        if self.builder.add(key, value) {
-
-        }
+        if self.builder.add(key, value) {}
         unimplemented!()
     }
 

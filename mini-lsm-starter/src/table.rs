@@ -4,7 +4,7 @@
 mod builder;
 mod iterator;
 
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
