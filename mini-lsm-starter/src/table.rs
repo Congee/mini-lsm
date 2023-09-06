@@ -35,9 +35,9 @@ impl BlockMeta {
         for meta in block_meta {
             bytes.put_u32_le(meta.offset as _);
             bytes.put_u16_le(meta.first_key.len() as _);
-            bytes.copy_from_slice(&meta.first_key);
+            bytes.extend_from_slice(&meta.first_key);
         }
-        bytes.copy_to_slice(buf);
+        buf.extend_from_slice(&bytes);
     }
 
     /// Decode block meta from a buffer.
@@ -46,7 +46,7 @@ impl BlockMeta {
         let mut vec: Vec<BlockMeta> = vec![];
         while buf.has_remaining() {
             let offset = buf.get_u32_le() as usize;
-            let key_len = buf.get_u16() as usize;
+            let key_len = buf.get_u16_le() as usize;
             let first_key = buf.copy_to_bytes(key_len);
 
             vec.push(Self { offset, first_key })
@@ -110,12 +110,26 @@ impl SsTable {
 
     /// Open SSTable from a file.
     pub fn open(id: usize, block_cache: Option<Arc<BlockCache>>, file: FileObject) -> Result<Self> {
-        unimplemented!()
+        let start = Self::block_metas_pos(&file)? as u64;
+        let buf = file.read(start, file.size() - 4 - start)?;
+
+        Ok(Self {
+            file,
+            block_metas: BlockMeta::decode_block_meta(buf.as_slice()),
+            block_meta_offset: start as usize,
+        })
     }
 
     /// Read a block from the disk.
     pub fn read_block(&self, block_idx: usize) -> Result<Arc<Block>> {
-        unimplemented!()
+        let lo = self.block_metas[block_idx].offset as u64;
+        let hi = match self.block_metas.get(block_idx + 1) {
+            Some(&BlockMeta { offset, .. }) => offset,
+            None => Self::block_metas_pos(&self.file)?,
+        } as u64;
+        let vec = self.file.read(lo, hi - lo)?;
+
+        Ok(Arc::new(Block::decode(vec.as_slice())))
     }
 
     /// Read a block from disk, with block cache. (Day 4)
@@ -127,12 +141,19 @@ impl SsTable {
     /// Note: You may want to make use of the `first_key` stored in `BlockMeta`.
     /// You may also assume the key-value pairs stored in each consecutive block are sorted.
     pub fn find_block_idx(&self, key: &[u8]) -> usize {
-        unimplemented!()
+        self.block_metas
+            .binary_search_by(|meta| meta.first_key.as_ref().cmp(key))
+            .unwrap_or_else(std::convert::identity)
     }
 
     /// Get number of data blocks.
     pub fn num_of_blocks(&self) -> usize {
-        unimplemented!()
+        self.block_metas.len()
+    }
+
+    fn block_metas_pos(file: &FileObject) -> Result<usize> {
+        let vec = file.read(file.size() - 4, 4)?;
+        Ok(u32::from_le_bytes(vec.as_slice().try_into().unwrap()) as usize)
     }
 }
 

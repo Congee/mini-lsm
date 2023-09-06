@@ -56,6 +56,9 @@ impl BlockBuilder {
 
         debug_assert!(self.remaining() >= 0);
 
+        // TODO: better tests
+        // assert!(2 + key.len() + 2 + value.len() + 2 + COUNT_SIZE + CHECKSUM_SIZE <= self.cap);
+
         if self.offset + len + meta_len > self.cap {
             // encoded size
             return false;
@@ -94,5 +97,9 @@ impl BlockBuilder {
         }
 
         self.block
+    }
+
+    pub fn size(&self) -> usize {
+        self.block.len()
     }
 }

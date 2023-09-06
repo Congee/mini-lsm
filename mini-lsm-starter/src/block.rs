@@ -101,6 +101,10 @@ impl Block {
         let key_len = u16::from_le_bytes(self.data[pos..pos + 2].try_into().unwrap());
         &self.data[pos + 2..pos + 2 + key_len as usize]
     }
+
+    pub fn len(&self) -> usize {
+        self.data.len() + self.padding as usize + self.offsets.len() * 2 + COUNT_SIZE + CHECKSUM_SIZE
+    }
 }
 
 #[cfg(test)]
