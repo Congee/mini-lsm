@@ -1,9 +1,10 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
+#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod                                                            .
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
 mod builder;
 mod iterator;
 
+use std::cmp::max;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -127,9 +128,8 @@ impl SsTable {
             Some(&BlockMeta { offset, .. }) => offset,
             None => Self::block_metas_pos(&self.file)?,
         } as u64;
-        let vec = self.file.read(lo, hi - lo)?;
 
-        Ok(Arc::new(Block::decode(vec.as_slice())))
+        Ok(Arc::new(Block::decode(&self.file.read(lo, hi - lo)?)))
     }
 
     /// Read a block from disk, with block cache. (Day 4)
@@ -143,6 +143,25 @@ impl SsTable {
     pub fn find_block_idx(&self, key: &[u8]) -> usize {
         self.block_metas
             .binary_search_by(|meta| meta.first_key.as_ref().cmp(key))
+            .map_err(|insert| {
+                if insert == self.num_of_blocks() {
+                    return max(0, insert as isize - 1) as usize;
+                }
+
+                if self.block_metas[insert].first_key.as_ref() > key {
+                    let last = self
+                        .read_block(max(0, insert as isize - 1) as _)
+                        .ok()
+                        .map(|x| x.last() >= Some(key));
+
+                    if last == Some(true) {
+                        return max(0, insert as isize - 1) as usize;
+                    } else {
+                        return insert;
+                    }
+                }
+                return insert;
+            })
             .unwrap_or_else(std::convert::identity)
     }
 

@@ -26,7 +26,7 @@ impl SsTableBuilder {
             builder: BlockBuilder::new(block_size),
             blocks: vec![],
             block_size,
-            offset: 2,
+            offset: 0,
         }
     }
 

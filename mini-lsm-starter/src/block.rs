@@ -3,7 +3,7 @@ mod iterator;
 
 pub use builder::BlockBuilder;
 /// You may want to check `bytes::BufMut` out when manipulating continuous chunks of memory
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 pub use iterator::BlockIterator;
 
 /// A block is the smallest unit of read and caching in LSM tree.
@@ -58,13 +58,16 @@ impl Block {
         );
 
         let mut raw = vec![];
+        let mut buf = data;
         for _ in 0..count {
-            let key_len = u16::from_le_bytes(data[raw.len()..raw.len() + 2].try_into().unwrap());
-            raw.extend_from_slice(&data[raw.len()..raw.len() + 2 + key_len as usize]);
-            let val_len = u16::from_le_bytes(data[raw.len()..raw.len() + 2].try_into().unwrap());
-            raw.extend_from_slice(&data[raw.len()..raw.len() + 2 + val_len as usize]);
+            let key_len = buf.get_u16_le();
+            raw.put_u16_le(key_len);
+            raw.extend_from_slice(&buf.copy_to_bytes(key_len as _));
+
+            let val_len = buf.get_u16_le();
+            raw.put_u16_le(val_len);
+            raw.extend_from_slice(&buf.copy_to_bytes(val_len as _));
         }
-        // let raw = data[..data.len() - 4 - 2 - count as usize * 2].to_vec();
 
         // NOTE: don't use Vec::<_>::from_raw_parts because of alignment 1 -> 2
         let off = &data[data.len() - CHECKSUM_SIZE - COUNT_SIZE - count as usize * 2
@@ -102,8 +105,16 @@ impl Block {
         &self.data[pos + 2..pos + 2 + key_len as usize]
     }
 
+    pub fn last(&self) -> Option<&[u8]> {
+        self.offsets.last().map(|&idx| self.slice_at(idx as _))
+    }
+
     pub fn len(&self) -> usize {
-        self.data.len() + self.padding as usize + self.offsets.len() * 2 + COUNT_SIZE + CHECKSUM_SIZE
+        self.data.len()
+            + self.padding as usize
+            + self.offsets.len() * 2
+            + COUNT_SIZE
+            + CHECKSUM_SIZE
     }
 }
 
