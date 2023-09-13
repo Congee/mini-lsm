@@ -8,7 +8,7 @@ use anyhow::Result;
 
 use super::StorageIterator;
 
-struct IterWrapper<I: StorageIterator> {
+pub struct IterWrapper<I: StorageIterator> {
     pub idx: usize,
     pub inner_iter: Box<I>,
 }
@@ -93,7 +93,7 @@ impl<I: StorageIterator> StorageIterator for MergeIterator<I> {
                 bytes::Bytes::copy_from_slice(x.inner_iter.value()),
             );
             // NOTE: Avoid calling PeekMut::drop
-            dbg!("nexting", tup);
+            // dbg!("nexting", tup);
             let mut opt = self.iters.pop().unwrap();
             opt.inner_iter.next()?;
             if opt.inner_iter.is_valid() {
@@ -106,7 +106,7 @@ impl<I: StorageIterator> StorageIterator for MergeIterator<I> {
             bytes::Bytes::copy_from_slice(x.inner_iter.key()),
             bytes::Bytes::copy_from_slice(x.inner_iter.value()),
         );
-        dbg!("removing", tup);
+        // dbg!("removing", tup);
         self.current.as_mut().unwrap().inner_iter.next()?;
 
         if self.is_valid() {

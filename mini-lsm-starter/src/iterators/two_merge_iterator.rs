@@ -1,9 +1,7 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use anyhow::Result;
 
 use super::StorageIterator;
+use bytes::Bytes;
 
 /// Merges two iterators of different types into one. If the two iterators have the same key, only
 /// produce the key once and prefer the entry from A.
@@ -11,28 +9,76 @@ pub struct TwoMergeIterator<A: StorageIterator, B: StorageIterator> {
     a: A,
     b: B,
     // Add fields as need
+    // TODO: static dispatch
+    key: Bytes,
+    value: Bytes,
 }
 
 impl<A: StorageIterator, B: StorageIterator> TwoMergeIterator<A, B> {
     pub fn create(a: A, b: B) -> Result<Self> {
-        unimplemented!()
+        let mut this = Self {
+            a,
+            b,
+            key: Bytes::new(),
+            value: Bytes::new(),
+        };
+
+        this.next()?;
+
+        Ok(this)
+    }
+
+    fn copy_from_a(&mut self) {
+        if self.a.is_valid() {
+            self.key = Bytes::copy_from_slice(self.a.key());
+            self.value = Bytes::copy_from_slice(self.a.value());
+        }
+    }
+
+    fn copy_from_b(&mut self) {
+        if self.b.is_valid() {
+            self.key = Bytes::copy_from_slice(self.b.key());
+            self.value = Bytes::copy_from_slice(self.b.value());
+        }
     }
 }
 
 impl<A: StorageIterator, B: StorageIterator> StorageIterator for TwoMergeIterator<A, B> {
     fn key(&self) -> &[u8] {
-        unimplemented!()
+        self.key.as_ref()
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.value.as_ref()
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        !self.key.is_empty()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        if self.a.is_valid() && self.b.is_valid() {
+            match self.a.key().cmp(self.b.key()) {
+                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
+                    self.copy_from_a();
+                    self.a.next()?;
+                    self.b.next()?;
+                }
+                _ => {
+                    self.copy_from_b();
+                    self.b.next()?;
+                }
+            }
+        } else if self.a.is_valid() {
+            self.copy_from_a();
+            self.a.next()?;
+        } else if self.b.is_valid() {
+            self.copy_from_b();
+            self.b.next()?;
+        } else {
+            self.key = Bytes::new();
+        }
+
+        Ok(())
     }
 }
