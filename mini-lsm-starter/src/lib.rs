@@ -1,3 +1,5 @@
+#![feature(bound_map)]
+
 pub mod block;
 pub mod iterators;
 pub mod lsm_iterator;

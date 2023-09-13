@@ -1,4 +1,5 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod                                                            .
+#![allow(unused_variables)]
+// TODO(you): remove this lint after implementing this mod                                                            .
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
 mod builder;
@@ -174,6 +175,10 @@ impl SsTable {
         let vec = file.read(file.size() - 4, 4)?;
         Ok(u32::from_le_bytes(vec.as_slice().try_into().unwrap()) as usize)
     }
+}
+
+pub fn is_true(x: bool) -> bool {
+    x
 }
 
 #[cfg(test)]
