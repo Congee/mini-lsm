@@ -12,7 +12,7 @@ use parking_lot::RwLock;
 use crate::block::Block;
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::mem_table::MemTable;
-use crate::table::SsTable;
+use crate::table::{SsTable, SsTableBuilder};
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 
@@ -46,30 +46,52 @@ impl LsmStorageInner {
 /// The storage interface of the LSM tree.
 pub struct LsmStorage {
     inner: Arc<RwLock<Arc<LsmStorageInner>>>,
+    dir: std::path::PathBuf,
 }
 
 impl LsmStorage {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Ok(Self {
             inner: Arc::new(RwLock::new(Arc::new(LsmStorageInner::create()))),
+            dir: path.as_ref().into(),
         })
     }
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        unimplemented!()
+        if let Some(k) = self.inner.read().memtable.get(key) {
+            return Ok(Some(k));
+        }
+
+        if let Some(k) = self
+            .inner
+            .read()
+            .imm_memtables
+            .iter()
+            .rev()
+            .map(|mem| mem.get(key))
+            .filter(|x| x.is_some())
+            .next()
+            .flatten()
+        {
+            return Ok(Some(k));
+        }
+
+        self.inner.read().l0_sstables
     }
 
     /// Put a key-value pair into the storage by writing into the current memtable.
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         assert!(!value.is_empty(), "value cannot be empty");
         assert!(!key.is_empty(), "key cannot be empty");
-        unimplemented!()
+        self.inner.write().memtable.put(key, value);
+
+        Ok(())
     }
 
     /// Remove a key from the storage by writing an empty value.
     pub fn delete(&self, _key: &[u8]) -> Result<()> {
-        unimplemented!()
+        self.put(_key, b"")
     }
 
     /// Persist data to disk.
@@ -77,7 +99,15 @@ impl LsmStorage {
     /// In day 3: flush the current memtable to disk as L0 SST.
     /// In day 6: call `fsync` on WAL.
     pub fn sync(&self) -> Result<()> {
-        unimplemented!()
+        let mut builder = SsTableBuilder::new(4096);
+        let memtable = self.inner.read().memtable.clone();
+        self.inner.read().memtable.flush(&mut builder)?;
+
+        let sstable = builder.build(4096, None, &self.dir)?;
+        // self.inner.write().l0_sstables.push(Arc::new(sstable));
+        // self.inner.write().imm_memtables.push(memtable);
+
+        Ok(())
     }
 
     /// Create an iterator over a range of keys.

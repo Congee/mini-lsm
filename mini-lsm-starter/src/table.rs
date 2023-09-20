@@ -166,6 +166,10 @@ impl SsTable {
             .unwrap_or_else(std::convert::identity)
     }
 
+    // pub fn get(&self, key: &[u8]) -> Option<Bytes> {
+    //
+    // }
+
     /// Get number of data blocks.
     pub fn num_of_blocks(&self) -> usize {
         self.block_metas.len()
