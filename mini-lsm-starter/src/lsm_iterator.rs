@@ -3,25 +3,42 @@
 
 use anyhow::Result;
 
-use crate::iterators::StorageIterator;
+use crate::{
+    iterators::{
+        merge_iterator::MergeIterator, two_merge_iterator::TwoMergeIterator, StorageIterator,
+    },
+    mem_table::MemTableIterator,
+    table::SsTableIterator,
+};
 
-pub struct LsmIterator {}
+type LsmIteratorInner =
+    TwoMergeIterator<MergeIterator<MemTableIterator>, MergeIterator<SsTableIterator>>;
+
+pub struct LsmIterator {
+    iter: LsmIteratorInner,
+}
+
+impl LsmIterator {
+    pub fn new(iter: LsmIteratorInner) -> Self {
+        Self { iter }
+    }
+}
 
 impl StorageIterator for LsmIterator {
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.iter.is_valid()
     }
 
     fn key(&self) -> &[u8] {
-        unimplemented!()
+        self.iter.key()
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.iter.value()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        self.iter.next()
     }
 }
 
@@ -39,18 +56,18 @@ impl<I: StorageIterator> FusedIterator<I> {
 
 impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.iter.is_valid()
     }
 
     fn key(&self) -> &[u8] {
-        unimplemented!()
+        self.iter.key()
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.iter.value()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        self.iter.next()
     }
 }

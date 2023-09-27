@@ -1,5 +1,4 @@
-#![allow(unused_variables)]
-// TODO(you): remove this lint after implementing this mod                                                            .
+#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
 mod builder;
@@ -138,10 +137,7 @@ impl SsTable {
         unimplemented!()
     }
 
-    /// Find the block that may contain `key`.
-    /// Note: You may want to make use of the `first_key` stored in `BlockMeta`.
-    /// You may also assume the key-value pairs stored in each consecutive block are sorted.
-    pub fn find_block_idx(&self, key: &[u8]) -> usize {
+    pub fn __find_block_idx(&self, key: &[u8]) -> Result<usize, usize> {
         self.block_metas
             .binary_search_by(|meta| meta.first_key.as_ref().cmp(key))
             .map_err(|insert| {
@@ -163,6 +159,13 @@ impl SsTable {
                 }
                 return insert;
             })
+    }
+
+    /// Find the block that may contain `key`.
+    /// Note: You may want to make use of the `first_key` stored in `BlockMeta`.
+    /// You may also assume the key-value pairs stored in each consecutive block are sorted.
+    pub fn find_block_idx(&self, key: &[u8]) -> usize {
+        self.__find_block_idx(key)
             .unwrap_or_else(std::convert::identity)
     }
 

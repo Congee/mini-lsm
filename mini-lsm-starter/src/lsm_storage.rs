@@ -9,10 +9,12 @@ use anyhow::Result;
 use bytes::Bytes;
 use parking_lot::RwLock;
 
-use crate::block::Block;
+use crate::block::{Block, BlockIterator};
+use crate::iterators::merge_iterator::MergeIterator;
+use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::mem_table::MemTable;
-use crate::table::{SsTable, SsTableBuilder};
+use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 
@@ -38,7 +40,7 @@ impl LsmStorageInner {
             imm_memtables: vec![],
             l0_sstables: vec![],
             levels: vec![],
-            next_sst_id: 1,
+            next_sst_id: 0,
         }
     }
 }
@@ -57,13 +59,20 @@ impl LsmStorage {
         })
     }
 
-    /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        if let Some(k) = self.inner.read().memtable.get(key) {
-            return Ok(Some(k));
+        self.__get(key).map(|opt| match opt {
+            Some(v) if !v.is_empty() => Some(v),
+            _ => None,
+        })
+    }
+
+    /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
+    pub fn __get(&self, key: &[u8]) -> Result<Option<Bytes>> {
+        if let Some(v) = self.inner.read().memtable.get(key) {
+            return Ok(Some(v));
         }
 
-        if let Some(k) = self
+        if let Some(v) = self
             .inner
             .read()
             .imm_memtables
@@ -74,10 +83,27 @@ impl LsmStorage {
             .next()
             .flatten()
         {
-            return Ok(Some(k));
+            return Ok(Some(v));
         }
 
-        self.inner.read().l0_sstables
+        // Search backwards on all sstables considering tombstones
+        self.inner
+            .read()
+            .l0_sstables
+            .iter()
+            .rev()
+            .map(|sstable| {
+                sstable.__find_block_idx(key).ok().map(|idx| {
+                    sstable.read_block(idx).map(|block| {
+                        let iter = BlockIterator::create_and_seek_to_key(block, key);
+                        Bytes::copy_from_slice(iter.value())
+                    })
+                })
+            })
+            .filter(|x| x.is_some())
+            .next()
+            .flatten()
+            .transpose()
     }
 
     /// Put a key-value pair into the storage by writing into the current memtable.
@@ -91,7 +117,9 @@ impl LsmStorage {
 
     /// Remove a key from the storage by writing an empty value.
     pub fn delete(&self, _key: &[u8]) -> Result<()> {
-        self.put(_key, b"")
+        self.inner.write().memtable.put(_key, b"");
+
+        Ok(())
     }
 
     /// Persist data to disk.
@@ -103,9 +131,16 @@ impl LsmStorage {
         let memtable = self.inner.read().memtable.clone();
         self.inner.read().memtable.flush(&mut builder)?;
 
-        let sstable = builder.build(4096, None, &self.dir)?;
-        // self.inner.write().l0_sstables.push(Arc::new(sstable));
-        // self.inner.write().imm_memtables.push(memtable);
+        let filename = format!("{}.sst", self.inner.read().next_sst_id);
+        let path = self.dir.join(filename);
+        let sstable = builder.build(4096, None, &path)?;
+
+        let guard = self.inner.write();
+        let mut snapshot = guard.as_ref().clone();
+        let memtable = std::mem::replace(&mut snapshot.memtable, Arc::new(MemTable::create()));
+        snapshot.imm_memtables.push(memtable);
+        snapshot.l0_sstables.push(Arc::new(sstable));
+        snapshot.next_sst_id += 1;
 
         Ok(())
     }
@@ -116,6 +151,27 @@ impl LsmStorage {
         _lower: Bound<&[u8]>,
         _upper: Bound<&[u8]>,
     ) -> Result<FusedIterator<LsmIterator>> {
-        unimplemented!()
+        let guard = self.inner.read();
+        let mut mem_iters = vec![Box::new(guard.memtable.scan(_lower, _upper))];
+        mem_iters.extend(
+            guard
+                .imm_memtables
+                .iter()
+                .map(|tbl| Box::new(tbl.scan(_lower, _upper))),
+        );
+
+        let sst_iters: Result<Vec<_>> = guard
+            .l0_sstables
+            .iter()
+            .map(|sst| SsTableIterator::by_range(sst.clone(), _lower, _upper).map(Box::new))
+            .into_iter()
+            .collect();
+
+        let two = TwoMergeIterator::create(
+            MergeIterator::create(mem_iters),
+            MergeIterator::create(sst_iters?),
+        )?;
+
+        Ok(FusedIterator::new(LsmIterator::new(two)))
     }
 }

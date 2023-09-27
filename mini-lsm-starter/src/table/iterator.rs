@@ -1,6 +1,8 @@
+use std::ops::Bound;
 use std::sync::Arc;
 
 use anyhow::Result;
+use bytes::Bytes;
 
 use super::SsTable;
 use crate::block::BlockIterator;
@@ -11,6 +13,9 @@ pub struct SsTableIterator {
     table: Arc<SsTable>,
     blk_idx: usize,
     iter: BlockIterator,
+    lower: Bound<Bytes>,
+    upper: Bound<Bytes>,
+    in_bounds: bool,
 }
 
 impl SsTableIterator {
@@ -24,6 +29,9 @@ impl SsTableIterator {
             table,
             blk_idx,
             iter,
+            lower: Bound::Unbounded,
+            upper: Bound::Unbounded,
+            in_bounds: true,
         })
     }
 
@@ -46,6 +54,9 @@ impl SsTableIterator {
             table,
             blk_idx,
             iter,
+            lower: Bound::Unbounded,
+            upper: Bound::Unbounded,
+            in_bounds: true,
         })
     }
 
@@ -55,6 +66,22 @@ impl SsTableIterator {
         self.iter = Self::create_and_seek_to_key(self.table.clone(), key)?.iter;
 
         Ok(())
+    }
+
+    pub fn by_range(table: Arc<SsTable>, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> Result<Self> {
+        let mut this = match lower {
+            Bound::Included(lo) => Self::create_and_seek_to_key(table, lo)?,
+            Bound::Excluded(lo) => {
+                let mut this = Self::create_and_seek_to_key(table, lo)?;
+                if this.iter.is_valid() && this.iter.key() == lo {
+                    this.iter.next();
+                }
+                this
+            }
+            Bound::Unbounded => Self::create_and_seek_to_first(table)?,
+        };
+        this.upper = upper.map(Bytes::copy_from_slice);
+        Ok(this)
     }
 }
 
@@ -71,7 +98,7 @@ impl StorageIterator for SsTableIterator {
 
     /// Return whether the current block iterator is valid or not.
     fn is_valid(&self) -> bool {
-        self.iter.is_valid()
+        self.in_bounds && self.iter.is_valid()
     }
 
     /// Move to the next `key` in the block.
@@ -80,12 +107,19 @@ impl StorageIterator for SsTableIterator {
         self.iter.next();
 
         if self.iter.is_valid() {
+            match &self.upper {
+                Bound::Included(hi) if self.key() > hi => self.in_bounds = false,
+                Bound::Excluded(hi) if self.key() >= hi => self.in_bounds = false,
+                _ => {},
+            };
             return Ok(());
         }
 
         self.blk_idx += 1;
 
         if self.blk_idx == self.table.num_of_blocks() {
+            self.in_bounds = false;
+
             return Ok(()); // TODO: ??? return Err(anyhow!("iterator reached the end"));
         }
 
