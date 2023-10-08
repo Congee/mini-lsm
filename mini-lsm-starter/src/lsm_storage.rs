@@ -9,6 +9,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use parking_lot::RwLock;
 
+use super::iterators::StorageIterator;
 use crate::block::{Block, BlockIterator};
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
@@ -94,7 +95,7 @@ impl LsmStorage {
             .rev()
             .map(|sstable| {
                 sstable.__find_block_idx(key).ok().map(|idx| {
-                    sstable.read_block(idx).map(|block| {
+                    sstable.read_block_cached(idx).map(|block| {
                         let iter = BlockIterator::create_and_seek_to_key(block, key);
                         Bytes::copy_from_slice(iter.value())
                     })
@@ -133,7 +134,7 @@ impl LsmStorage {
 
         let filename = format!("{}.sst", self.inner.read().next_sst_id);
         let path = self.dir.join(filename);
-        let sstable = builder.build(4096, None, &path)?;
+        let sstable = builder.build(4096, Some(Arc::new(moka::sync::Cache::new(128))), &path)?;
 
         let guard = self.inner.write();
         let mut snapshot = guard.as_ref().clone();
@@ -167,10 +168,15 @@ impl LsmStorage {
             .into_iter()
             .collect();
 
-        let two = TwoMergeIterator::create(
+        let mut two = TwoMergeIterator::create(
             MergeIterator::create(mem_iters),
             MergeIterator::create(sst_iters?),
         )?;
+
+        // XXX: skip to first valid
+        while two.is_valid() && two.value().is_empty() {
+            two.next()?;
+        }
 
         Ok(FusedIterator::new(LsmIterator::new(two)))
     }

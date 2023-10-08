@@ -84,14 +84,16 @@ impl SsTableBuilder {
         buf.extend_from_slice(&(offset as u32).to_le_bytes());
 
         Ok(SsTable {
+            id,
             file: FileObject::create(path.as_ref(), buf.to_vec())?,
             block_metas,
             block_meta_offset: offset,
+            cache: block_cache,
         })
     }
 
     #[cfg(test)]
     pub(crate) fn build_for_test(self, path: impl AsRef<Path>) -> Result<SsTable> {
-        self.build(0, None, path)
+        self.build(0, Some(Arc::new(moka::sync::Cache::new(128))), path)
     }
 }

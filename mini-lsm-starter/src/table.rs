@@ -1,11 +1,9 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 mod builder;
 mod iterator;
 
 use std::cmp::max;
 use std::io::Write;
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -95,29 +93,35 @@ impl FileObject {
 /// | Data Block #1 | ... | Data Block #N | Meta Block #1 | ... | Meta Block #N | Meta Block Offset (u32) |
 /// -------------------------------------------------------------------------------------------------------
 pub struct SsTable {
+    id: usize,
     /// The actual storage unit of SsTable, the format is as above.
     file: FileObject,
     /// The meta blocks that hold info for data blocks.
     block_metas: Vec<BlockMeta>,
     /// The offset that indicates the start point of meta blocks in `file`.
     block_meta_offset: usize,
+
+    cache: Option<Arc<BlockCache>>,
 }
 
 impl SsTable {
     #[cfg(test)]
     pub(crate) fn open_for_test(file: FileObject) -> Result<Self> {
-        Self::open(0, None, file)
+        Self::open(0, Some(Arc::new(moka::sync::Cache::new(128))), file)
     }
 
     /// Open SSTable from a file.
     pub fn open(id: usize, block_cache: Option<Arc<BlockCache>>, file: FileObject) -> Result<Self> {
-        let start = Self::block_metas_pos(&file)? as u64;
+        let tail = file.read(file.size() - 4, 4)?;
+        let start = u32::from_le_bytes(tail.as_slice().try_into().unwrap()) as u64;
         let buf = file.read(start, file.size() - 4 - start)?;
 
         Ok(Self {
+            id,
             file,
             block_metas: BlockMeta::decode_block_meta(buf.as_slice()),
             block_meta_offset: start as usize,
+            cache: block_cache,
         })
     }
 
@@ -126,7 +130,7 @@ impl SsTable {
         let lo = self.block_metas[block_idx].offset as u64;
         let hi = match self.block_metas.get(block_idx + 1) {
             Some(&BlockMeta { offset, .. }) => offset,
-            None => Self::block_metas_pos(&self.file)?,
+            None => self.block_meta_offset,
         } as u64;
 
         Ok(Arc::new(Block::decode(&self.file.read(lo, hi - lo)?)))
@@ -134,7 +138,12 @@ impl SsTable {
 
     /// Read a block from disk, with block cache. (Day 4)
     pub fn read_block_cached(&self, block_idx: usize) -> Result<Arc<Block>> {
-        unimplemented!()
+        match &self.cache {
+            Some(cache) => cache
+                .try_get_with((self.id, block_idx), || self.read_block(block_idx))
+                .map_err(|err| anyhow::anyhow!(err)),
+            _ => self.read_block(block_idx),
+        }
     }
 
     pub fn __find_block_idx(&self, key: &[u8]) -> Result<usize, usize> {
@@ -147,7 +156,7 @@ impl SsTable {
 
                 if self.block_metas[insert].first_key.as_ref() > key {
                     let last = self
-                        .read_block(max(0, insert as isize - 1) as _)
+                        .read_block_cached(max(0, insert as isize - 1) as _)
                         .ok()
                         .map(|x| x.last() >= Some(key));
 
@@ -169,18 +178,9 @@ impl SsTable {
             .unwrap_or_else(std::convert::identity)
     }
 
-    // pub fn get(&self, key: &[u8]) -> Option<Bytes> {
-    //
-    // }
-
     /// Get number of data blocks.
     pub fn num_of_blocks(&self) -> usize {
         self.block_metas.len()
-    }
-
-    fn block_metas_pos(file: &FileObject) -> Result<usize> {
-        let vec = file.read(file.size() - 4, 4)?;
-        Ok(u32::from_le_bytes(vec.as_slice().try_into().unwrap()) as usize)
     }
 }
 

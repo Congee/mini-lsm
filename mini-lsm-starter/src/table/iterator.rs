@@ -22,7 +22,7 @@ impl SsTableIterator {
     /// Create a new iterator and seek to the first key-value pair in the first data block.
     pub fn create_and_seek_to_first(table: Arc<SsTable>) -> Result<Self> {
         let blk_idx = 0;
-        let block = table.read_block(blk_idx)?;
+        let block = table.read_block_cached(blk_idx)?;
         let iter = BlockIterator::create_and_seek_to_first(block);
 
         Ok(Self {
@@ -38,7 +38,7 @@ impl SsTableIterator {
     /// Seek to the first key-value pair in the first data block.
     pub fn seek_to_first(&mut self) -> Result<()> {
         self.blk_idx = 0;
-        let block = self.table.read_block(self.blk_idx)?;
+        let block = self.table.read_block_cached(self.blk_idx)?;
         self.iter = BlockIterator::create_and_seek_to_first(block);
 
         Ok(())
@@ -47,7 +47,7 @@ impl SsTableIterator {
     /// Create a new iterator and seek to the first key-value pair which >= `key`.
     pub fn create_and_seek_to_key(table: Arc<SsTable>, key: &[u8]) -> Result<Self> {
         let blk_idx = std::cmp::min(table.find_block_idx(key), table.num_of_blocks() - 1);
-        let block = table.read_block(blk_idx)?;
+        let block = table.read_block_cached(blk_idx)?;
         let iter = BlockIterator::create_and_seek_to_key(block.clone(), key);
 
         Ok(Self {
@@ -123,7 +123,7 @@ impl StorageIterator for SsTableIterator {
             return Ok(()); // TODO: ??? return Err(anyhow!("iterator reached the end"));
         }
 
-        let block = self.table.read_block(self.blk_idx)?;
+        let block = self.table.read_block_cached(self.blk_idx)?;
         self.iter = BlockIterator::create_and_seek_to_first(block);
 
         Ok(())
