@@ -1,3 +1,5 @@
+use bytes::BufMut;
+
 use super::Block;
 use super::{CHECKSUM_SIZE, COUNT_SIZE};
 #[cfg(feature = "checksum")]
@@ -5,9 +7,10 @@ use crc32fast;
 
 /// Builds a block.
 pub struct BlockBuilder {
-    block: Block,
-    offset: usize,
     cap: usize,
+    data: Vec<u8>,
+    offsets: Vec<u16>,
+    padding: u16,
     #[cfg(feature = "checksum")]
     hasher: crc32fast::Hasher,
 }
@@ -18,32 +21,24 @@ impl BlockBuilder {
         // alignment
         // assert!(block_size.count_ones() == 1 && block_size >= 512);
 
-        let block = Block {
-            data: vec![],
-            padding: 0,
-            offsets: vec![],
-            #[cfg(feature = "checksum")]
-            sum: 0,
-        };
-
         Self {
-            block,
-            offset: 0,
             cap: block_size,
+            data: vec![],
+            offsets: vec![],
+            padding: 0,
             #[cfg(feature = "checksum")]
             hasher: crc32fast::Hasher::new(),
         }
     }
 
-    fn extend(&mut self, bytes: &[u8]) {
-        self.block.data.extend_from_slice(bytes);
-        #[cfg(feature = "checksum")]
-        self.hasher.update(bytes);
-    }
+    // fn extend(&mut self, bytes: &[u8]) {
+    //     #[cfg(feature = "checksum")]
+    //     self.hasher.update(bytes);
+    // }
 
     fn remaining(&self) -> isize {
         let meta_len = COUNT_SIZE + CHECKSUM_SIZE;
-        let used = self.block.data.len() + self.block.offsets.len() * 2 + meta_len;
+        let used = self.data.len() + self.offsets.len() * 2 + meta_len;
 
         self.cap as isize - used as isize
     }
@@ -59,30 +54,28 @@ impl BlockBuilder {
         // TODO: better tests
         // assert!(2 + key.len() + 2 + value.len() + 2 + COUNT_SIZE + CHECKSUM_SIZE <= self.cap);
 
-        if self.offset + len + meta_len > self.cap {
+        if self.data.len() + len + meta_len > self.cap {
             // encoded size
             return false;
         }
 
-        self.block.offsets.push(self.offset as u16);
-        self.offset += len;
-
-        self.extend(&(key.len() as u16).to_le_bytes());
-        self.extend(key);
-        self.extend(&(value.len() as u16).to_le_bytes());
-        self.extend(value);
+        self.offsets.push(self.data.len() as u16);
+        self.data.put_u16_le(key.len() as u16);
+        self.data.put_slice(key);
+        self.data.put_u16_le(value.len() as u16);
+        self.data.put_slice(value);
 
         true
     }
 
     /// Check if there is no key-value pair in the block.
     pub fn is_empty(&self) -> bool {
-        self.offset == 0
+        self.data.is_empty()
     }
 
     /// Finalize the block.
     pub fn build(mut self) -> Block {
-        self.block.padding = self.remaining() as _;
+        let padding = self.remaining() as _;
 
         #[cfg(feature = "checksum")]
         {
@@ -96,10 +89,15 @@ impl BlockBuilder {
             self.block.sum = self.hasher.finalize();
         }
 
-        self.block
+        Block {
+            data: self.data,
+            offsets: self.offsets,
+            padding,
+        }
     }
 
     pub fn size(&self) -> usize {
-        self.block.len()
+        todo!();
+        0
     }
 }
