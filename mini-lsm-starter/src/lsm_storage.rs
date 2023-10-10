@@ -50,6 +50,7 @@ impl LsmStorageInner {
 pub struct LsmStorage {
     inner: Arc<RwLock<Arc<LsmStorageInner>>>,
     dir: std::path::PathBuf,
+    cache: Arc<BlockCache>,
 }
 
 impl LsmStorage {
@@ -57,6 +58,7 @@ impl LsmStorage {
         Ok(Self {
             inner: Arc::new(RwLock::new(Arc::new(LsmStorageInner::create()))),
             dir: path.as_ref().into(),
+            cache: Arc::new(BlockCache::new(1 << 20)),
         })
     }
 
@@ -134,7 +136,7 @@ impl LsmStorage {
 
         let filename = format!("{}.sst", self.inner.read().next_sst_id);
         let path = self.dir.join(filename);
-        let sstable = builder.build(4096, Some(Arc::new(moka::sync::Cache::new(128))), &path)?;
+        let sstable = builder.build(4096, Some(self.cache.clone()), &path)?;
 
         let guard = self.inner.write();
         let mut snapshot = guard.as_ref().clone();

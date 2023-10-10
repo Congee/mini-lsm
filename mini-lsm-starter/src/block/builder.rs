@@ -10,6 +10,7 @@ pub struct BlockBuilder {
     cap: usize,
     data: Vec<u8>,
     offsets: Vec<u16>,
+    #[cfg(feature = "checksum")]
     padding: u16,
     #[cfg(feature = "checksum")]
     hasher: crc32fast::Hasher,
@@ -25,6 +26,7 @@ impl BlockBuilder {
             cap: block_size,
             data: vec![],
             offsets: vec![],
+            #[cfg(feature = "checksum")]
             padding: 0,
             #[cfg(feature = "checksum")]
             hasher: crc32fast::Hasher::new(),
@@ -74,7 +76,7 @@ impl BlockBuilder {
     }
 
     /// Finalize the block.
-    pub fn build(mut self) -> Block {
+    pub fn build(self) -> Block {
         let padding = self.remaining() as _;
 
         #[cfg(feature = "checksum")]

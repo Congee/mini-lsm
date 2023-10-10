@@ -56,34 +56,43 @@ impl BlockMeta {
 }
 
 /// A file object.
-pub struct FileObject(Bytes);
+pub struct FileObject {
+    size: u64,
+    file: std::fs::File,
+}
 
 impl FileObject {
     pub fn read(&self, offset: u64, len: u64) -> Result<Vec<u8>> {
-        Ok(self.0[offset as usize..(offset + len) as usize].to_vec())
+        let mut buf = vec![0u8; len as _];
+        self.file.read_exact_at(buf.as_mut(), offset)?;
+        Ok(buf)
     }
 
     pub fn size(&self) -> u64 {
-        self.0.len() as u64
+        self.size
     }
 
     /// Create a new file object (day 2) and write the file to the disk (day 4).
     pub fn create(path: &Path, data: Vec<u8>) -> Result<Self> {
-        std::fs::OpenOptions::new()
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
             .write(true)
             .create(true)
-            .open(path)?
-            .write_all(&data)?;
+            .open(path)?;
+        file.write_all(&data)?;
+        file.flush()?;
 
-        Ok(Self(Bytes::copy_from_slice(&data)))
+        Ok(Self {
+            size: data.len() as _,
+            file,
+        })
     }
 
     pub fn open(path: &Path) -> Result<Self> {
-        let mut file = std::fs::OpenOptions::new().read(true).open(path)?;
-        let mut bin = BytesMut::new().writer();
-        std::io::copy(&mut file, &mut bin)?;
+        let file = std::fs::OpenOptions::new().read(true).open(path)?;
+        let size = file.metadata()?.len();
 
-        Ok(Self(bin.into_inner().into()))
+        Ok(Self { size, file })
     }
 }
 
