@@ -47,10 +47,14 @@ impl SsTableBuilder {
         }
     }
 
+    fn exact_size(&self) -> usize {
+        self.blocks.iter().fold(0, |acc, blk| acc + blk.len()) + self.builder.size()
+    }
+
     /// Get the estimated size of the SSTable.
     /// Since the data blocks contain much more data than meta blocks, just return the size of data blocks here.
     pub fn estimated_size(&self) -> usize {
-        self.blocks.iter().fold(0, |acc, blk| acc + blk.len()) + self.builder.size()
+        self.exact_size()
     }
 
     /// Builds the SSTable and writes it to the given path. No need to actually write to disk until

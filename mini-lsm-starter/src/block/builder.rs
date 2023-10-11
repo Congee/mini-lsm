@@ -99,7 +99,6 @@ impl BlockBuilder {
     }
 
     pub fn size(&self) -> usize {
-        todo!();
-        0
+        self.cap - self.remaining() as usize
     }
 }

@@ -19,6 +19,8 @@ use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 
+static MIN_NUM_SST_FILES_TO_COMPACT: usize = 2;
+
 #[derive(Clone)]
 pub struct LsmStorageInner {
     /// The current memtable.
@@ -51,14 +53,21 @@ pub struct LsmStorage {
     inner: Arc<RwLock<Arc<LsmStorageInner>>>,
     dir: std::path::PathBuf,
     cache: Arc<BlockCache>,
+    requested_compation: std::sync::atomic::AtomicBool,
+    compaction_tx: flume::Sender<Vec<Arc<SsTable>>>,
+    compaction_rx: flume::Receiver<Vec<Arc<SsTable>>>,
 }
 
 impl LsmStorage {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let (tx, rx) = flume::unbounded();
         Ok(Self {
             inner: Arc::new(RwLock::new(Arc::new(LsmStorageInner::create()))),
             dir: path.as_ref().into(),
             cache: Arc::new(BlockCache::new(1 << 20)),
+            requested_compation: std::sync::atomic::AtomicBool::new(false),
+            compaction_tx: tx,
+            compaction_rx: rx,
         })
     }
 
@@ -145,6 +154,8 @@ impl LsmStorage {
         snapshot.l0_sstables.push(Arc::new(sstable));
         snapshot.next_sst_id += 1;
 
+        self.try_compact();
+
         Ok(())
     }
 
@@ -181,5 +192,52 @@ impl LsmStorage {
         }
 
         Ok(FusedIterator::new(LsmIterator::new(two)))
+    }
+
+    fn loop_compaction(&self) {}
+
+    // should be triggered only after flushing a memtable
+    fn try_compact(&self) {
+        // TODO: do I need a transaction?
+        // XXX: or remove this shared state and drop a request if ssts don't exist
+        if (self
+            .requested_compation
+            .load(std::sync::atomic::Ordering::SeqCst))
+        {
+            return;
+        }
+
+        let guard = self.inner.read();
+        // guard.l0_sstables.iter().filter(|sst| sst.num_of_blocks)
+
+        self.compaction_tx.send(..); // XXX: blocking
+    }
+
+    pub fn compact(&mut self) -> Result<()> {
+        // TODO: drop sender
+        let ssts = self.compaction_rx.recv()?;
+
+        let iters: Result<Vec<_>> = ssts
+            .iter()
+            .map(|sst| SsTableIterator::create_and_seek_to_first(sst.clone()).map(Box::new))
+            .into_iter()
+            .collect();
+
+        // TODO: do not load everything into memory. stream it to disk by batch
+        let mut iter = MergeIterator::create(iters?);
+        let mut mem = MemTable::create();
+        while iter.is_valid() {
+            mem.put(iter.key(), iter.value());
+            iter.next()?;
+        }
+
+        let mut builder = SsTableBuilder::new(4096);
+        mem.flush(&mut builder)?;
+        let filename = format!("{}.sst", self.inner.read().next_sst_id);
+        let path = self.dir.join(filename);
+        let sstable = builder.build(4096, Some(self.cache.clone()), &path)?;
+
+
+        Ok(())
     }
 }
