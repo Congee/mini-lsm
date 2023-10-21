@@ -11,7 +11,9 @@ use crate::table::SsTableBuilder;
 
 /// A basic mem-table based on crossbeam-skiplist
 pub struct MemTable {
+    // needs interior mutability
     map: Arc<SkipMap<Bytes, Bytes>>,
+    size: std::sync::atomic::AtomicUsize,
 }
 
 impl MemTable {
@@ -19,6 +21,7 @@ impl MemTable {
     pub fn create() -> Self {
         Self {
             map: Arc::new(SkipMap::<Bytes, Bytes>::new()),
+            size: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -27,20 +30,23 @@ impl MemTable {
         self.map.get(key).map(|entry| entry.value().clone())
     }
 
+    pub fn size(&self) -> usize {
+        self.size.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Put a key-value pair into the mem-table.
     pub fn put(&self, key: &[u8], value: &[u8]) {
         self.map
             .insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(value));
+
+        self.size
+            .fetch_add(key.len() + value.len(), std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Get an iterator over a range of keys.
     pub fn scan(&self, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> MemTableIterator {
         let lower = lower.map(Bytes::copy_from_slice);
         let upper = upper.map(Bytes::copy_from_slice);
-        // let curr = self
-        //     .map
-        //     .lower_bound(lower.as_ref())
-        //     .map(|entry| (entry.key().clone(), entry.value().clone()));
 
         let mut iter = MemTableIteratorBuilder {
             map: self.map.clone(),
@@ -48,13 +54,15 @@ impl MemTable {
             curr: None,
         }
         .build();
-        let _ = iter.next();  // XXX: This is anti-pattern
+        let _ = iter.next(); // XXX: This is anti-pattern
         iter
     }
 
     /// Flush the mem-table to SSTable.
     pub fn flush(&self, builder: &mut SsTableBuilder) -> Result<()> {
-        self.map.iter().for_each(|entry| builder.add(entry.key(), entry.value()));
+        self.map
+            .iter()
+            .for_each(|entry| builder.add(entry.key(), entry.value()));
 
         Ok(())
     }

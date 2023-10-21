@@ -19,7 +19,21 @@ use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 
+const fn validate_block_size(size: usize) -> usize {
+    // aligned to the power of 2
+    if size.count_ones() != 1 {
+        panic!("not to the power of 2");
+    }
+
+    if size < 4096 {
+        panic!("size is too small");
+    }
+
+    size
+}
+
 static MIN_NUM_SST_FILES_TO_COMPACT: usize = 2;
+static BLOCK_SIZE: usize = validate_block_size(4 * 1024);
 
 #[derive(Clone)]
 pub struct LsmStorageInner {
@@ -33,7 +47,7 @@ pub struct LsmStorageInner {
     #[allow(dead_code)]
     levels: Vec<Vec<Arc<SsTable>>>,
     /// The next SSTable ID.
-    next_sst_id: usize,
+    next_sst_id: usize, // TODO:
 }
 
 impl LsmStorageInner {
@@ -46,47 +60,13 @@ impl LsmStorageInner {
             next_sst_id: 0,
         }
     }
-}
-
-/// The storage interface of the LSM tree.
-pub struct LsmStorage {
-    inner: Arc<RwLock<Arc<LsmStorageInner>>>,
-    dir: std::path::PathBuf,
-    cache: Arc<BlockCache>,
-    requested_compation: std::sync::atomic::AtomicBool,
-    compaction_tx: flume::Sender<Vec<Arc<SsTable>>>,
-    compaction_rx: flume::Receiver<Vec<Arc<SsTable>>>,
-}
-
-impl LsmStorage {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let (tx, rx) = flume::unbounded();
-        Ok(Self {
-            inner: Arc::new(RwLock::new(Arc::new(LsmStorageInner::create()))),
-            dir: path.as_ref().into(),
-            cache: Arc::new(BlockCache::new(1 << 20)),
-            requested_compation: std::sync::atomic::AtomicBool::new(false),
-            compaction_tx: tx,
-            compaction_rx: rx,
-        })
-    }
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        self.__get(key).map(|opt| match opt {
-            Some(v) if !v.is_empty() => Some(v),
-            _ => None,
-        })
-    }
-
-    /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
-    pub fn __get(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        if let Some(v) = self.inner.read().memtable.get(key) {
+        if let Some(v) = self.memtable.get(key) {
             return Ok(Some(v));
         }
 
         if let Some(v) = self
-            .inner
-            .read()
             .imm_memtables
             .iter()
             .rev()
@@ -99,9 +79,7 @@ impl LsmStorage {
         }
 
         // Search backwards on all sstables considering tombstones
-        self.inner
-            .read()
-            .l0_sstables
+        self.l0_sstables
             .iter()
             .rev()
             .map(|sstable| {
@@ -118,63 +96,19 @@ impl LsmStorage {
             .transpose()
     }
 
-    /// Put a key-value pair into the storage by writing into the current memtable.
-    pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        assert!(!value.is_empty(), "value cannot be empty");
-        assert!(!key.is_empty(), "key cannot be empty");
-        self.inner.write().memtable.put(key, value);
-
-        Ok(())
-    }
-
-    /// Remove a key from the storage by writing an empty value.
-    pub fn delete(&self, _key: &[u8]) -> Result<()> {
-        self.inner.write().memtable.put(_key, b"");
-
-        Ok(())
-    }
-
-    /// Persist data to disk.
-    ///
-    /// In day 3: flush the current memtable to disk as L0 SST.
-    /// In day 6: call `fsync` on WAL.
-    pub fn sync(&self) -> Result<()> {
-        let mut builder = SsTableBuilder::new(4096);
-        let memtable = self.inner.read().memtable.clone();
-        self.inner.read().memtable.flush(&mut builder)?;
-
-        let filename = format!("{}.sst", self.inner.read().next_sst_id);
-        let path = self.dir.join(filename);
-        let sstable = builder.build(4096, Some(self.cache.clone()), &path)?;
-
-        let guard = self.inner.write();
-        let mut snapshot = guard.as_ref().clone();
-        let memtable = std::mem::replace(&mut snapshot.memtable, Arc::new(MemTable::create()));
-        snapshot.imm_memtables.push(memtable);
-        snapshot.l0_sstables.push(Arc::new(sstable));
-        snapshot.next_sst_id += 1;
-
-        self.try_compact();
-
-        Ok(())
-    }
-
-    /// Create an iterator over a range of keys.
     pub fn scan(
         &self,
         _lower: Bound<&[u8]>,
         _upper: Bound<&[u8]>,
     ) -> Result<FusedIterator<LsmIterator>> {
-        let guard = self.inner.read();
-        let mut mem_iters = vec![Box::new(guard.memtable.scan(_lower, _upper))];
+        let mut mem_iters = vec![Box::new(self.memtable.scan(_lower, _upper))];
         mem_iters.extend(
-            guard
-                .imm_memtables
+            self.imm_memtables
                 .iter()
                 .map(|tbl| Box::new(tbl.scan(_lower, _upper))),
         );
 
-        let sst_iters: Result<Vec<_>> = guard
+        let sst_iters: Result<Vec<_>> = self
             .l0_sstables
             .iter()
             .map(|sst| SsTableIterator::by_range(sst.clone(), _lower, _upper).map(Box::new))
@@ -193,29 +127,135 @@ impl LsmStorage {
 
         Ok(FusedIterator::new(LsmIterator::new(two)))
     }
+}
 
-    fn loop_compaction(&self) {}
+/// The storage interface of the LSM tree.
+pub struct LsmStorage {
+    inner: Arc<RwLock<Arc<LsmStorageInner>>>,
+    dir: std::path::PathBuf,
+    cache: Arc<BlockCache>,
+    sync_tx: flume::Sender<Option<()>>,
+    sync_rx: flume::Receiver<Option<()>>,
+}
 
-    // should be triggered only after flushing a memtable
-    fn try_compact(&self) {
-        // TODO: do I need a transaction?
-        // XXX: or remove this shared state and drop a request if ssts don't exist
-        if (self
-            .requested_compation
-            .load(std::sync::atomic::Ordering::SeqCst))
-        {
-            return;
-        }
+impl LsmStorage {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let (tx, rx) = flume::unbounded();
+        let this = Self {
+            inner: Arc::new(RwLock::new(Arc::new(LsmStorageInner::create()))),
+            dir: path.as_ref().into(),
+            cache: Arc::new(BlockCache::new(1 << 20)),
+            sync_tx: tx,
+            sync_rx: rx,
+        };
 
-        let guard = self.inner.read();
-        // guard.l0_sstables.iter().filter(|sst| sst.num_of_blocks)
-
-        self.compaction_tx.send(..); // XXX: blocking
+        Ok(this)
     }
 
-    pub fn compact(&mut self) -> Result<()> {
-        // TODO: drop sender
-        let ssts = self.compaction_rx.recv()?;
+    /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
+    pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
+        self.inner.read().get(key).map(|opt| match opt {
+            Some(v) if !v.is_empty() => Some(v),
+            _ => None,
+        })
+    }
+
+    /// Put a key-value pair into the storage by writing into the current memtable.
+    pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        assert!(!value.is_empty(), "value cannot be empty");
+        assert!(!key.is_empty(), "key cannot be empty");
+        let snapshot = self.inner.write().as_ref().clone();
+
+        let mem = snapshot.memtable.clone();
+        mem.put(key, value);
+
+        if mem.size() > 1000000 {
+            // TODO:
+            self.sync_tx.send(Some(()))?;
+        }
+
+        Ok(())
+    }
+
+    /// Remove a key from the storage by writing an empty value.
+    pub fn delete(&self, _key: &[u8]) -> Result<()> {
+        self.inner.write().as_ref().clone().memtable.put(_key, b"");
+
+        Ok(())
+    }
+
+    /// Persist data to disk.
+    ///
+    /// In day 3: flush the current memtable to disk as L0 SST.
+    /// In day 6: call `fsync` on WAL.
+    pub fn sync(&self) -> Result<()> {
+        let guard = self.inner.write();
+        let mut snapshot = self.inner.write().as_ref().clone();
+        let path = self.dir.join(format!("{}.sst", guard.next_sst_id));
+
+        drop(guard);  // XXX: no contention for self.sync()
+
+        let memtable = std::mem::replace(&mut snapshot.memtable, Arc::new(MemTable::create()));
+        snapshot.imm_memtables.push(memtable);
+
+        let mut builder = SsTableBuilder::new(BLOCK_SIZE);
+        snapshot.imm_memtables.last().unwrap().flush(&mut builder)?;
+
+        let sstable = builder.build(BLOCK_SIZE, Some(self.cache.clone()), &path)?;
+
+        snapshot.l0_sstables.push(Arc::new(sstable));
+        snapshot.next_sst_id += 1;
+
+        Ok(())
+    }
+
+    /// Create an iterator over a range of keys.
+    pub fn scan(
+        &self,
+        _lower: Bound<&[u8]>,
+        _upper: Bound<&[u8]>,
+    ) -> Result<FusedIterator<LsmIterator>> {
+        self.inner.read().scan(_lower, _upper)
+    }
+
+    fn loop_compaction(&self) -> Result<()> {
+        for msg in self.sync_rx.iter() {
+            if msg.is_none() {
+                return Ok(());
+            }
+
+            self.sync()?;
+
+            let guard = self.inner.write();
+
+            if guard.l0_sstables.len() == MIN_NUM_SST_FILES_TO_COMPACT {
+                self.compact(0)?;
+            }
+
+            for level in guard
+                .levels
+                .iter()
+                .filter(|vec| vec.len() == MIN_NUM_SST_FILES_TO_COMPACT)
+                .enumerate()
+                .map(|(idx, _)| idx + 1)
+            {
+                self.compact(level)?;
+            }
+        }
+
+        unreachable!();
+    }
+
+    /// Optimizing Space Amplification in RocksDB
+    /// https://www.cidrdb.org/cidr2017/papers/p82-dong-cidr17.pdf
+    pub fn compact(&self, level: usize) -> Result<()> {
+        // TODO: how long should I hold this lock?
+        let guard = self.inner.read();
+
+        let ssts = match level {
+            0 => &guard.l0_sstables,
+            x => &guard.levels[x],
+        };
 
         let iters: Result<Vec<_>> = ssts
             .iter()
@@ -223,21 +263,49 @@ impl LsmStorage {
             .into_iter()
             .collect();
 
+        let mut iters = iters?;
+
+        if let Some(next_level_sst) = guard.levels[level].get(0) {
+            iters.push(
+                SsTableIterator::create_and_seek_to_first(next_level_sst.clone()).map(Box::new)?,
+            )
+        }
+
+        drop(guard);
+
         // TODO: do not load everything into memory. stream it to disk by batch
-        let mut iter = MergeIterator::create(iters?);
-        let mut mem = MemTable::create();
+        let mut iter = MergeIterator::create(iters);
+        let mem = MemTable::create();
         while iter.is_valid() {
-            mem.put(iter.key(), iter.value());
+            if !iter.value().is_empty() {
+                mem.put(iter.key(), iter.value())
+            };
             iter.next()?;
         }
 
-        let mut builder = SsTableBuilder::new(4096);
+        let mut builder = SsTableBuilder::new(BLOCK_SIZE);
         mem.flush(&mut builder)?;
         let filename = format!("{}.sst", self.inner.read().next_sst_id);
         let path = self.dir.join(filename);
-        let sstable = builder.build(4096, Some(self.cache.clone()), &path)?;
+        let sstable = builder.build(BLOCK_SIZE, Some(self.cache.clone()), &path)?;
+        // delete all input sstables and replace them with the new sstable in the next level
 
+        let mut snapshot = self.inner.write().as_ref().clone();
+        match level {
+            0 => snapshot.l0_sstables.clear(),
+            x => snapshot.levels[x].clear(),
+        };
+
+        snapshot.levels[level].push(Arc::new(sstable));
 
         Ok(())
+    }
+
+    pub fn stop(&self) -> Result<()> {
+        self.sync_tx.send(None).map_err(|x| anyhow::anyhow!(x))
+    }
+
+    pub fn run(&self) -> Result<()> {
+        self.loop_compaction()
     }
 }

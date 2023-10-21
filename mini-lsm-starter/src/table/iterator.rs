@@ -13,7 +13,6 @@ pub struct SsTableIterator {
     table: Arc<SsTable>,
     blk_idx: usize,
     iter: BlockIterator,
-    lower: Bound<Bytes>,
     upper: Bound<Bytes>,
     in_bounds: bool,
 }
@@ -29,7 +28,6 @@ impl SsTableIterator {
             table,
             blk_idx,
             iter,
-            lower: Bound::Unbounded,
             upper: Bound::Unbounded,
             in_bounds: true,
         })
@@ -54,7 +52,6 @@ impl SsTableIterator {
             table,
             blk_idx,
             iter,
-            lower: Bound::Unbounded,
             upper: Bound::Unbounded,
             in_bounds: true,
         })
