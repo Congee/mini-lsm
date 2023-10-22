@@ -30,26 +30,26 @@ impl<A: StorageIterator, B: StorageIterator> TwoMergeIterator<A, B> {
 
     fn copy_from_a(&mut self) {
         if self.a.is_valid() {
-            self.key = Bytes::copy_from_slice(self.a.key());
-            self.value = Bytes::copy_from_slice(self.a.value());
+            self.key = self.a.key().clone();
+            self.value = self.a.value().clone();
         }
     }
 
     fn copy_from_b(&mut self) {
         if self.b.is_valid() {
-            self.key = Bytes::copy_from_slice(self.b.key());
-            self.value = Bytes::copy_from_slice(self.b.value());
+            self.key = self.b.key().clone();
+            self.value = self.b.value().clone();
         }
     }
 }
 
 impl<A: StorageIterator, B: StorageIterator> StorageIterator for TwoMergeIterator<A, B> {
-    fn key(&self) -> &[u8] {
-        self.key.as_ref()
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
-    fn value(&self) -> &[u8] {
-        self.value.as_ref()
+    fn value(&self) -> &Bytes {
+        &self.value
     }
 
     fn is_valid(&self) -> bool {
@@ -58,7 +58,7 @@ impl<A: StorageIterator, B: StorageIterator> StorageIterator for TwoMergeIterato
 
     fn next(&mut self) -> Result<()> {
         if self.a.is_valid() && self.b.is_valid() {
-            match self.a.key().cmp(self.b.key()) {
+            match self.a.key().cmp(&self.b.key()) {
                 std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
                     self.copy_from_a();
                     self.a.next()?;

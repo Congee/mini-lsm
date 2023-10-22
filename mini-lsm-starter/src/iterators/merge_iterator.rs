@@ -1,10 +1,8 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::cmp::{self};
 use std::collections::BinaryHeap;
 
 use anyhow::Result;
+use bytes::Bytes;
 
 use super::StorageIterator;
 
@@ -23,7 +21,7 @@ impl<I: StorageIterator> Eq for IterWrapper<I> {}
 
 impl<I: StorageIterator> PartialOrd for IterWrapper<I> {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        match self.inner_iter.key().cmp(other.inner_iter.key()) {
+        match self.inner_iter.key().cmp(&other.inner_iter.key()) {
             cmp::Ordering::Greater => Some(cmp::Ordering::Greater),
             cmp::Ordering::Less => Some(cmp::Ordering::Less),
             cmp::Ordering::Equal => self.idx.partial_cmp(&other.idx),
@@ -64,11 +62,11 @@ impl<I: StorageIterator> MergeIterator<I> {
 }
 
 impl<I: StorageIterator> StorageIterator for MergeIterator<I> {
-    fn key(&self) -> &[u8] {
+    fn key(&self) -> &Bytes {
         self.current.as_ref().unwrap().inner_iter.key()
     }
 
-    fn value(&self) -> &[u8] {
+    fn value(&self) -> &Bytes {
         self.current.as_ref().unwrap().inner_iter.value()
     }
 
@@ -77,23 +75,11 @@ impl<I: StorageIterator> StorageIterator for MergeIterator<I> {
     }
 
     fn next(&mut self) -> Result<()> {
-        // if self.key() == b"b" && self.iters.peek().unwrap().inner_iter.key() == b"b" {
-        //     assert_eq!(self.iters.len(), 2);
-        //     let key = self.iters.peek().unwrap().inner_iter.key();
-        //     dbg!(bytes::Bytes::copy_from_slice(key));
-        // }
-
         while self.is_valid()
             && self.iters.peek().map(|x| x.inner_iter.key())
                 == self.current.as_ref().map(|x| x.inner_iter.key())
         {
-            let x = self.iters.peek().unwrap();
-            let tup = (
-                bytes::Bytes::copy_from_slice(x.inner_iter.key()),
-                bytes::Bytes::copy_from_slice(x.inner_iter.value()),
-            );
             // NOTE: Avoid calling PeekMut::drop
-            // dbg!("nexting", tup);
             let mut opt = self.iters.pop().unwrap();
             opt.inner_iter.next()?;
             if opt.inner_iter.is_valid() {
@@ -101,12 +87,6 @@ impl<I: StorageIterator> StorageIterator for MergeIterator<I> {
             }
         }
 
-        let x = self.current.as_ref().unwrap();
-        let tup = (
-            bytes::Bytes::copy_from_slice(x.inner_iter.key()),
-            bytes::Bytes::copy_from_slice(x.inner_iter.value()),
-        );
-        // dbg!("removing", tup);
         self.current.as_mut().unwrap().inner_iter.next()?;
 
         if self.is_valid() {

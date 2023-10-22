@@ -84,12 +84,12 @@ impl SsTableIterator {
 
 impl StorageIterator for SsTableIterator {
     /// Return the `key` that's held by the underlying block iterator.
-    fn key(&self) -> &[u8] {
+    fn key(&self) -> &Bytes {
         self.iter.key()
     }
 
     /// Return the `value` that's held by the underlying block iterator.
-    fn value(&self) -> &[u8] {
+    fn value(&self) -> &Bytes {
         self.iter.value()
     }
 

@@ -80,18 +80,18 @@ fn test_sst_iterator() {
             let key = iter.key();
             let value = iter.value();
             assert_eq!(
-                key,
+                *key,
                 key_of(i),
                 "expected key: {:?}, actual key: {:?}",
                 as_bytes(&key_of(i)),
-                as_bytes(key)
+                as_bytes(&key)
             );
             assert_eq!(
-                value,
+                *value,
                 value_of(i),
                 "expected value: {:?}, actual value: {:?}",
                 as_bytes(&value_of(i)),
-                as_bytes(value)
+                as_bytes(&value)
             );
             iter.next().unwrap();
         }
@@ -109,18 +109,18 @@ fn test_sst_seek_key() {
             let key = iter.key();
             let value = iter.value();
             assert_eq!(
-                key,
+                *key,
                 key_of(i),
                 "expected key: {:?}, actual key: {:?}",
                 as_bytes(&key_of(i)),
-                as_bytes(key)
+                as_bytes(&key)
             );
             assert_eq!(
-                value,
+                *value,
                 value_of(i),
                 "expected value: {:?}, actual value: {:?}",
                 as_bytes(&value_of(i)),
-                as_bytes(value)
+                as_bytes(&value)
             );
             iter.seek_to_key(&format!("key_{:03}", i * 5 + offset).into_bytes())
                 .unwrap();

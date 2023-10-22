@@ -1,6 +1,3 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::ops::Bound;
 use std::path::Path;
 use std::sync::Arc;
@@ -15,7 +12,7 @@ use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::mem_table::MemTable;
-use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
+use crate::table::{SsTable, SsTableIterator};
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 
@@ -86,7 +83,7 @@ impl LsmStorageInner {
                 sstable.__find_block_idx(key).ok().map(|idx| {
                     sstable.read_block_cached(idx).map(|block| {
                         let iter = BlockIterator::create_and_seek_to_key(block, key);
-                        Bytes::copy_from_slice(iter.value())
+                        iter.value().clone()
                     })
                 })
             })
@@ -127,9 +124,17 @@ impl LsmStorageInner {
 
         Ok(FusedIterator::new(LsmIterator::new(two)))
     }
+
+    pub fn archive_mem_table(&mut self) {
+        self.imm_memtables.push(std::mem::replace(
+            &mut self.memtable,
+            Arc::new(MemTable::create()),
+        ));
+    }
 }
 
 /// The storage interface of the LSM tree.
+#[derive(Clone)]
 pub struct LsmStorage {
     inner: Arc<RwLock<Arc<LsmStorageInner>>>,
     dir: std::path::PathBuf,
@@ -138,10 +143,16 @@ pub struct LsmStorage {
     sync_rx: flume::Receiver<Option<()>>,
 }
 
+impl Drop for LsmStorage {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+
 impl LsmStorage {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let (tx, rx) = flume::unbounded();
-        let this = Self {
+        let lsm = Self {
             inner: Arc::new(RwLock::new(Arc::new(LsmStorageInner::create()))),
             dir: path.as_ref().into(),
             cache: Arc::new(BlockCache::new(1 << 20)),
@@ -149,7 +160,12 @@ impl LsmStorage {
             sync_rx: rx,
         };
 
-        Ok(this)
+        let this = lsm.clone();
+        std::thread::spawn(move || {
+            this.loop_compaction().unwrap();
+        });
+
+        Ok(lsm)
     }
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
@@ -161,12 +177,12 @@ impl LsmStorage {
     }
 
     /// Put a key-value pair into the storage by writing into the current memtable.
-    pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+    pub fn put(&self, key: Bytes, value: Bytes) -> Result<()> {
         assert!(!value.is_empty(), "value cannot be empty");
         assert!(!key.is_empty(), "key cannot be empty");
-        let snapshot = self.inner.write().as_ref().clone();
+        let inner = self.inner.write().as_ref().clone();
 
-        let mem = snapshot.memtable.clone();
+        let mem = inner.memtable.clone();
         mem.put(key, value);
 
         if mem.size() > 1000000 {
@@ -179,7 +195,12 @@ impl LsmStorage {
 
     /// Remove a key from the storage by writing an empty value.
     pub fn delete(&self, _key: &[u8]) -> Result<()> {
-        self.inner.write().as_ref().clone().memtable.put(_key, b"");
+        self.inner
+            .write()
+            .as_ref()
+            .clone()
+            .memtable
+            .put(Bytes::copy_from_slice(_key), Bytes::new());
 
         Ok(())
     }
@@ -188,23 +209,20 @@ impl LsmStorage {
     ///
     /// In day 3: flush the current memtable to disk as L0 SST.
     /// In day 6: call `fsync` on WAL.
+    // XXX: no contention for self.sync()
     pub fn sync(&self) -> Result<()> {
         let guard = self.inner.write();
-        let mut snapshot = self.inner.write().as_ref().clone();
-        let path = self.dir.join(format!("{}.sst", guard.next_sst_id));
+        let mut inner = guard.as_ref().clone();
+        let next_sst_id = inner.next_sst_id;
+        let path = self.path_of_sst(next_sst_id);
 
-        drop(guard);  // XXX: no contention for self.sync()
+        inner.archive_mem_table();
 
-        let memtable = std::mem::replace(&mut snapshot.memtable, Arc::new(MemTable::create()));
-        snapshot.imm_memtables.push(memtable);
+        let builder = inner.imm_memtables.last().unwrap().to_sst(BLOCK_SIZE);
+        let sstable = builder.export(next_sst_id, Some(self.cache.clone()), &path)?;
 
-        let mut builder = SsTableBuilder::new(BLOCK_SIZE);
-        snapshot.imm_memtables.last().unwrap().flush(&mut builder)?;
-
-        let sstable = builder.build(BLOCK_SIZE, Some(self.cache.clone()), &path)?;
-
-        snapshot.l0_sstables.push(Arc::new(sstable));
-        snapshot.next_sst_id += 1;
+        inner.l0_sstables.push(Arc::new(sstable));
+        inner.next_sst_id += 1;
 
         Ok(())
     }
@@ -257,13 +275,11 @@ impl LsmStorage {
             x => &guard.levels[x],
         };
 
-        let iters: Result<Vec<_>> = ssts
+        let mut iters = ssts
             .iter()
             .map(|sst| SsTableIterator::create_and_seek_to_first(sst.clone()).map(Box::new))
             .into_iter()
-            .collect();
-
-        let mut iters = iters?;
+            .collect::<Result<Vec<_>>>()?;
 
         if let Some(next_level_sst) = guard.levels[level].get(0) {
             iters.push(
@@ -278,25 +294,24 @@ impl LsmStorage {
         let mem = MemTable::create();
         while iter.is_valid() {
             if !iter.value().is_empty() {
-                mem.put(iter.key(), iter.value())
+                mem.put(iter.key().clone(), iter.value().clone())
             };
             iter.next()?;
         }
 
-        let mut builder = SsTableBuilder::new(BLOCK_SIZE);
-        mem.flush(&mut builder)?;
-        let filename = format!("{}.sst", self.inner.read().next_sst_id);
-        let path = self.dir.join(filename);
-        let sstable = builder.build(BLOCK_SIZE, Some(self.cache.clone()), &path)?;
+        let builder = mem.to_sst(BLOCK_SIZE);
+        let next_sst_id = self.inner.read().next_sst_id;
+        let path = self.path_of_sst(next_sst_id);
+        let sstable = builder.export(next_sst_id, Some(self.cache.clone()), &path)?;
         // delete all input sstables and replace them with the new sstable in the next level
 
-        let mut snapshot = self.inner.write().as_ref().clone();
+        let mut inner = self.inner.write().as_ref().clone();
         match level {
-            0 => snapshot.l0_sstables.clear(),
-            x => snapshot.levels[x].clear(),
+            0 => inner.l0_sstables.clear(),
+            x => inner.levels[x].clear(),
         };
 
-        snapshot.levels[level].push(Arc::new(sstable));
+        inner.levels[level].push(Arc::new(sstable));
 
         Ok(())
     }
@@ -305,7 +320,7 @@ impl LsmStorage {
         self.sync_tx.send(None).map_err(|x| anyhow::anyhow!(x))
     }
 
-    pub fn run(&self) -> Result<()> {
-        self.loop_compaction()
+    fn path_of_sst(&self, sst_id: usize) -> std::path::PathBuf {
+        self.dir.join(format!("{}.sst", sst_id))
     }
 }

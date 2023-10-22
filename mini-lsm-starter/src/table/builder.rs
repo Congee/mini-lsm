@@ -59,7 +59,7 @@ impl SsTableBuilder {
 
     /// Builds the SSTable and writes it to the given path. No need to actually write to disk until
     /// chapter 4 block cache.
-    pub fn build(
+    pub fn export(
         self,
         id: usize,
         block_cache: Option<Arc<BlockCache>>,
@@ -98,6 +98,6 @@ impl SsTableBuilder {
 
     #[cfg(test)]
     pub(crate) fn build_for_test(self, path: impl AsRef<Path>) -> Result<SsTable> {
-        self.build(0, None, path)
+        self.export(0, None, path)
     }
 }

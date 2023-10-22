@@ -35,12 +35,10 @@ impl MemTable {
     }
 
     /// Put a key-value pair into the mem-table.
-    pub fn put(&self, key: &[u8], value: &[u8]) {
-        self.map
-            .insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(value));
-
+    pub fn put(&self, key: Bytes, value: Bytes) {
         self.size
             .fetch_add(key.len() + value.len(), std::sync::atomic::Ordering::SeqCst);
+        self.map.insert(key, value);
     }
 
     /// Get an iterator over a range of keys.
@@ -59,12 +57,12 @@ impl MemTable {
     }
 
     /// Flush the mem-table to SSTable.
-    pub fn flush(&self, builder: &mut SsTableBuilder) -> Result<()> {
+    pub fn to_sst(&self, block_size: usize) -> SsTableBuilder {
+        let mut builder = SsTableBuilder::new(block_size);
         self.map
             .iter()
             .for_each(|entry| builder.add(entry.key(), entry.value()));
-
-        Ok(())
+        builder
     }
 }
 
@@ -82,15 +80,13 @@ pub struct MemTableIterator {
 }
 
 impl StorageIterator for MemTableIterator {
-    fn value(&self) -> &[u8] {
-        &self
-            .with_curr(|curr| curr.as_ref().map(|(_, value)| value))
+    fn value(&self) -> &Bytes {
+        self.with_curr(|curr| curr.as_ref().map(|(_, value)| value))
             .unwrap()
     }
 
-    fn key(&self) -> &[u8] {
-        &self
-            .with_curr(|curr| curr.as_ref().map(|(key, _)| key))
+    fn key(&self) -> &Bytes {
+        self.with_curr(|curr| curr.as_ref().map(|(key, _)| key))
             .unwrap()
     }
 

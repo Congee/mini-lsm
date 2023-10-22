@@ -1,7 +1,5 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use anyhow::Result;
+use bytes::Bytes;
 
 use crate::{
     iterators::{
@@ -29,11 +27,11 @@ impl StorageIterator for LsmIterator {
         self.iter.is_valid()
     }
 
-    fn key(&self) -> &[u8] {
+    fn key(&self) -> &Bytes {
         self.iter.key()
     }
 
-    fn value(&self) -> &[u8] {
+    fn value(&self) -> &Bytes {
         self.iter.value()
     }
 
@@ -63,11 +61,11 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
         self.iter.is_valid()
     }
 
-    fn key(&self) -> &[u8] {
+    fn key(&self) -> &Bytes {
         self.iter.key()
     }
 
-    fn value(&self) -> &[u8] {
+    fn value(&self) -> &Bytes {
         self.iter.value()
     }
 

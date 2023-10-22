@@ -26,12 +26,12 @@ impl StorageIterator for MockIterator {
         Ok(())
     }
 
-    fn key(&self) -> &[u8] {
-        self.data[self.index].0.as_ref()
+    fn key(&self) -> &Bytes {
+        &self.data[self.index].0
     }
 
-    fn value(&self) -> &[u8] {
-        self.data[self.index].1.as_ref()
+    fn value(&self) -> &Bytes {
+        &self.data[self.index].1
     }
 
     fn is_valid(&self) -> bool {

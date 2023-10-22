@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use bytes::Bytes;
+
 use super::Block;
 
 /// Iterates on a block.
@@ -7,19 +9,21 @@ pub struct BlockIterator {
     /// The internal `Block`, wrapped by an `Arc`
     block: Arc<Block>,
     /// The current key, empty represents the iterator is invalid
-    key: Vec<u8>,
+    key: Bytes,
     /// The corresponding value, can be empty
-    value: Vec<u8>,
+    value: Bytes,
     /// Current index of the key-value pair, should be in range of [0, num_of_elements)
     idx: usize,
 }
+
+type Entry = (Bytes, Bytes);
 
 impl BlockIterator {
     fn new(block: Arc<Block>) -> Self {
         Self {
             block,
-            key: Vec::new(),
-            value: Vec::new(),
+            key: Bytes::new(),
+            value: Bytes::new(),
             idx: 0,
         }
     }
@@ -39,13 +43,13 @@ impl BlockIterator {
     }
 
     /// Returns the key of the current entry.
-    pub fn key(&self) -> &[u8] {
-        self.key.as_slice()
+    pub fn key(&self) -> &Bytes {
+        &self.key
     }
 
     /// Returns the value of the current entry.
-    pub fn value(&self) -> &[u8] {
-        self.value.as_slice()
+    pub fn value(&self) -> &Bytes {
+        &self.value
     }
 
     /// Returns true if the iterator is valid.
@@ -61,20 +65,22 @@ impl BlockIterator {
     }
 
     /// Move to the next key in the block.
-    pub fn next(&mut self) {
+    pub fn next(&mut self) -> Entry {
         if self.block.offsets.len() == self.idx + 1 {
             self.key.clear();
             self.idx = 0;
         } else {
             self.seek_to(self.idx + 1);
         }
+
+        (self.key.clone(), self.value.clone())
     }
 
     fn seek_to(&mut self, idx: usize) {
         self.idx = idx;
         let pos = self.block.offsets[self.idx] as usize;
-        self.key = self.block.slice_at(pos).to_vec();
-        self.value = self.block.slice_at(pos + 2 + self.key.len()).to_vec();
+        self.key = Bytes::copy_from_slice(self.block.slice_at(pos));
+        self.value = Bytes::copy_from_slice(self.block.slice_at(pos + 2 + self.key.len()));
     }
 
     /// Seek to the first key that >= `key`.

@@ -73,19 +73,20 @@ fn test_block_iterator() {
         for i in 0..num_of_keys() {
             let key = iter.key();
             let value = iter.value();
+            // let (key, value) = iter.next().unwrap();
             assert_eq!(
-                key,
+                *key,
                 key_of(i),
                 "expected key: {:?}, actual key: {:?}",
                 as_bytes(&key_of(i)),
-                as_bytes(key)
+                as_bytes(&key)
             );
             assert_eq!(
-                value,
+                *value,
                 value_of(i),
                 "expected value: {:?}, actual value: {:?}",
                 as_bytes(&value_of(i)),
-                as_bytes(value)
+                as_bytes(&value)
             );
             iter.next();
         }
@@ -102,14 +103,14 @@ fn test_block_seek_key() {
             let key = iter.key();
             let value = iter.value();
             assert_eq!(
-                key,
+                *key,
                 key_of(i),
                 "expected key: {:?}, actual key: {:?}",
                 as_bytes(&key_of(i)),
                 as_bytes(key)
             );
             assert_eq!(
-                value,
+                *value,
                 value_of(i),
                 "expected value: {:?}, actual value: {:?}",
                 as_bytes(&value_of(i)),
