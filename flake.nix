@@ -26,6 +26,7 @@
           pkgconfig
           buf-language-server
           protobuf
+          mold
         ];
         buildInputs = with pkgs; [  # run time
           debugger

@@ -1,19 +1,140 @@
-use std::io::Write;
+use core::mem::MaybeUninit;
+use std::io::{Read, Write};
 use std::os::unix::fs::FileExt;
 use std::os::unix::fs::OpenOptionsExt;
 
 use anyhow::Result;
+use bytes::Buf;
 use bytes::Bytes;
 use bytes::BytesMut;
+use bytes_utils::SegmentedSlice;
+use crc32fast;
 use libc;
 
 use crate::mem_table::MemTable;
 
 // ioctl(file, BLKGETSIZE64, &file_size_in_bytes);
+const HEADER_SIZE: usize = 4 + 2 + 1;
+const BLOCK_SIZE: usize = 1 << 15;
 const ALIGNMENT_SIZE: usize = 4096;
 const U16SZ: usize = std::mem::size_of::<u16>();
 
-struct Wal {
+// https://github.com/facebook/rocksdb/wiki/Write-Ahead-Log-File-Format
+
+#[repr(u8)]
+enum Kind {
+    Zero = 0,
+    First,
+    Middle,
+    Last,
+    Full,
+}
+
+#[repr(packed)]
+struct Header {
+    crc: u32,
+    size: u16,
+    kind: Kind,
+}
+
+impl Header {
+    pub fn as_slice(&self) -> &[u8; std::mem::size_of::<Self>()] {
+        unsafe { std::mem::transmute(self) }
+    }
+}
+
+#[repr(packed)]
+struct Record {
+    crc: u32,
+    size: u16,
+    kind: Kind,
+    payload: [u8; BLOCK_SIZE - HEADER_SIZE],
+}
+
+pub struct WriteAheadLog {
+    file: std::fs::File,
+}
+
+impl WriteAheadLog {
+    pub fn create<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .custom_flags(libc::O_DIRECT | libc::O_DSYNC)
+            .open(&path)?;
+
+        Ok(Self { file })
+    }
+
+    pub fn append(&mut self, key: Bytes, value: Bytes) -> Result<()> {
+        static mut BUF: [u8; BLOCK_SIZE] = [0u8; BLOCK_SIZE];
+
+        let mut buffers = [
+            &(key.len() as u16).to_le_bytes(),
+            key.as_ref(),
+            value.as_ref(),
+        ];
+        let mut payload = SegmentedSlice::new(&mut buffers);
+        let payload_len = 2 + key.len() + value.len();
+
+        let mut buf_written = 0;
+        while payload.has_remaining() {
+            // TODO: skip to the next block if space remaining <= HEADER_SIZE
+
+            let mut kind;
+            let to_write;
+            if payload.remaining() <= BLOCK_SIZE - buf_written - HEADER_SIZE {
+                if payload_len > payload.remaining() {
+                    kind = Kind::Full;
+                    to_write = payload.remaining();
+                } else {
+                    kind = Kind::Last;
+                    to_write = payload.remaining();
+                }
+            } else if payload_written == 0 {
+                kind = Kind::First;
+                to_write = payload.remaining() - (BLOCK_SIZE - buf_written - HEADER_SIZE);
+            } else {
+                kind = Kind::Middle;
+                to_write = BLOCK_SIZE - HEADER_SIZE;
+            }
+
+            unsafe {
+                match kind {
+                    Kind::First => {
+                        let pay = &mut BUF
+                            [buf_written + HEADER_SIZE..buf_written + HEADER_SIZE + to_write];
+
+                        let header = Header {
+                            crc: crc32fast::hash(pay),
+                            size: to_write as _,
+                            kind,
+                        };
+
+                        BUF[buf_written..buf_written + HEADER_SIZE]
+                            .copy_from_slice(header.as_slice());
+                        payload.copy_to_slice(pay);
+                    }
+                    Kind::Middle => {
+
+                    }
+                    Kind::Last => {}
+                    _ => unreachable!(),
+                }
+
+                if BLOCK_SIZE - buf_written <= HEADER_SIZE {
+                    BUF[buf_written..].fill(0);
+                    buf_written = 0;
+                }
+                self.file.write_all(&BUF)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub struct Wal {
     file: std::fs::File,
 }
 
@@ -95,7 +216,6 @@ impl Wal {
                         tbl.put(key, value);
                         remaining = usize::MAX;
                         state = Reading::Start;
-
                     } else {
                         buffer.extend_from_slice(&buf);
                         remaining = total - ALIGNMENT_SIZE;

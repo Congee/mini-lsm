@@ -34,6 +34,10 @@ impl MemTable {
         self.size.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
     /// Put a key-value pair into the mem-table.
     pub fn put(&self, key: Bytes, value: Bytes) {
         self.size
